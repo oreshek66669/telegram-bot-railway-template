@@ -1,86 +1,70 @@
-"""Update handlers. Add your own commands here — see README "Extending the bot".
+from aiogram import F, Router
+from aiogram.filters import CommandStart
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, PreCheckoutQuery
 
-The ``db: Storage`` argument is injected by aiogram's dependency injection:
-``main.py`` puts the storage into the dispatcher's workflow data under the
-key ``db``, and any handler that declares a parameter with that name gets it.
-"""
+router = Router()
 
-from __future__ import annotations
+prices = {
+    "full": [("По плечи", 60), ("По пояс", 80), ("Фулл", 100)],
+    "half": [("По плечи", 40), ("По пояс", 60), ("Фулл", 80)],
+    "sketch": [("По плечи", 25), ("По пояс", 40), ("Фулл", 60)]
+}
 
-from aiogram import F, Router, html
-from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+names = {
+    "full": "✨ Полный рендер",
+    "half": "🌙 Халф рендер",
+    "sketch": "✏️ Скетч"
+}
 
-from db import Storage
-
-router = Router(name="starter")
-
-HELP_TEXT = (
-    "<b>Commands</b>\n"
-    "/start — welcome message and menu\n"
-    "/help — this message\n\n"
-    "Anything else you send is echoed back. "
-    "Fork the repo and edit <code>handlers.py</code> to make it yours."
-)
-
-
-def main_menu() -> InlineKeyboardMarkup:
-    """Example inline keyboard. Callback data is namespaced as 'menu:<action>'."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="ℹ️ Help", callback_data="menu:help"),
-                InlineKeyboardButton(text="📊 Stats", callback_data="menu:stats"),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🚂 Deploy your own", url="https://railway.com/deploy"
-                )
-            ],
-        ]
-    )
-
+def menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=names[x], callback_data=f"type:{x}")]
+        for x in prices
+    ])
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, db: Storage) -> None:
-    """/start — greet the user, remember them, show the menu."""
-    user = message.from_user
-    if user is not None:
-        await db.track_user(user.id, user.username)
-    name = html.quote(user.full_name) if user else "there"
+async def start(message: Message):
     await message.answer(
-        f"👋 Hello, <b>{name}</b>!\n\n"
-        "I'm a webhook-powered starter bot running on Railway.\n"
-        "Pick an option below or just send me a message.",
-        reply_markup=main_menu(),
+        "🎨 <b>КОМИШЕНЫ</b>\n\nВыберите тип работы:",
+        reply_markup=menu()
     )
 
+@router.callback_query(F.data.startswith("type:"))
+async def choose(callback: CallbackQuery):
+    t = callback.data.split(":")[1]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"{size} — {price} ⭐",
+         callback_data=f"pay:{t}:{price}")]
+        for size, price in prices[t]
+    ])
+    await callback.message.edit_text(
+        f"<b>{names[t]}</b>\n\nВыберите размер:",
+        reply_markup=kb
+    )
+    await callback.answer()
 
-@router.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    """/help — list available commands."""
-    await message.answer(HELP_TEXT)
+@router.callback_query(F.data.startswith("pay:"))
+async def pay(callback: CallbackQuery, bot):
+    _, t, price = callback.data.split(":")
+    price = int(price)
 
+    await bot.send_invoice(
+        callback.from_user.id,
+        title=names[t],
+        description="Комиссия за арт",
+        payload=f"commission:{t}:{price}",
+        currency="XTR",
+        prices=[LabeledPrice(label="Комиссия", amount=price)]
+    )
+    await callback.answer()
 
-@router.callback_query(F.data == "menu:help")
-async def cb_help(callback: CallbackQuery) -> None:
-    """Inline 'Help' button — same text as /help, sent as a new message."""
-    if isinstance(callback.message, Message):
-        await callback.message.answer(HELP_TEXT)
-    await callback.answer()  # Always answer, or the button spinner hangs.
+@router.pre_checkout_query()
+async def checkout(q: PreCheckoutQuery):
+    await q.answer(ok=True)
 
-
-@router.callback_query(F.data == "menu:stats")
-async def cb_stats(callback: CallbackQuery, db: Storage) -> None:
-    """Inline 'Stats' button — demonstrates reading from the storage layer."""
-    count = await db.user_count()
-    await callback.answer(f"{count} user(s) have started this bot.", show_alert=True)
-
-
-@router.message(F.text)
-async def echo(message: Message, db: Storage) -> None:
-    """Fallback: echo any plain-text message. Replace with your own logic."""
-    user = message.from_user
-    if user is not None:
-        await db.track_user(user.id, user.username)
-    await message.answer(f"You said: {html.quote(message.text or '')}")
+@router.message(F.successful_payment)
+async def paid(message: Message):
+    await message.answer(
+        "✅ <b>Оплата прошла успешно!</b>\n\n"
+        "Спасибо за заказ! 💗"
+    )
